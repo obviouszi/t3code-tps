@@ -3000,6 +3000,76 @@ describe("deriveMessagesTimelineRows", () => {
     expect(assistantRows.map((row) => row.showAssistantMeta)).toEqual([false, true]);
   });
 
+  it("adds tok/sec only to a completed assistant reply with reliable timing", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const source = fixture.visibleTurnItems.find(
+      (row) => row.item.type === "assistant_message" && row.item.runId === fixture.historyRunId,
+    );
+    if (!source || source.item.type !== "assistant_message") {
+      throw new Error("Expected a completed assistant item");
+    }
+    const providerTurnId = ProviderTurnId.make("speed-turn");
+    const startedAt = DateTime.makeUnsafe(fixture.time(10));
+    const completedAt = DateTime.makeUnsafe(fixture.time(12));
+    const projectedItem = {
+      ...source,
+      item: { ...source.item, providerTurnId, startedAt, completedAt, updatedAt: completedAt },
+    };
+    const timelineEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [projectedItem],
+      optimisticMessages: [],
+    });
+    const baseInput = {
+      timelineEntries,
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    };
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      providerTurns: [
+        {
+          id: providerTurnId,
+          status: "completed",
+          turnTokenUsage: {
+            usageStatus: "complete",
+            usageScope: "main_agent",
+            hasSubagents: false,
+            inputTokens: 10,
+            outputTokens: 100,
+            generationDurationMs: 2_000,
+          },
+        },
+      ],
+    });
+    const row = rows.find((candidate) => candidate.kind === "message");
+    expect(
+      (row as { assistantGenerationRateTps?: number } | undefined)?.assistantGenerationRateTps,
+    ).toBe(50);
+
+    const unmeasuredRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      providerTurns: [
+        {
+          id: providerTurnId,
+          status: "completed",
+          turnTokenUsage: {
+            usageStatus: "partial",
+            usageScope: "main_agent",
+            hasSubagents: false,
+            outputTokens: 100,
+          },
+        },
+      ],
+    });
+    const unmeasuredRow = unmeasuredRows.find((candidate) => candidate.kind === "message");
+    expect(
+      (unmeasuredRow as { assistantGenerationRateTps?: number } | undefined)
+        ?.assistantGenerationRateTps,
+    ).toBeUndefined();
+  });
+
   it("withholds assistant metadata while the active turn is still in progress", () => {
     const rows = deriveMessagesTimelineRows({
       timelineEntries: [

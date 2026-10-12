@@ -2806,6 +2806,105 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       ),
   );
 
+  it.effect(
+    "reports how long Claude spent generating, without first-token waits or tool runs",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeWakeHarness;
+        yield* harness.runtime.startTurn(
+          makeClaudeTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("generation-timing-attempt"),
+            text: "Write the file",
+            attachments: [],
+          }),
+        );
+        const stream = (event: unknown) =>
+          claudeSdkFrame({
+            type: "stream_event",
+            event,
+            parent_tool_use_id: null,
+            session_id: WAKE_NATIVE_SESSION,
+            uuid: "stream-frame",
+          });
+        // A finished thought is projected at once, which marks its response's first content as handled.
+        const firstContent = [
+          stream({
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "Thinking" },
+          }),
+          stream({ type: "content_block_stop", index: 0 }),
+        ];
+        const offer = (...frames: ReadonlyArray<SDKMessage>) =>
+          Effect.forEach(frames, (frame) => Queue.offer(harness.sdkMessages, frame));
+        // Frames are handled in order, so a projected thought proves every frame before it was too.
+        const reasoningItems = () =>
+          new Map(
+            harness.events.flatMap((event) =>
+              event.type === "turn_item.updated" && event.turnItem.type === "reasoning"
+                ? [[event.turnItem.id, event.turnItem.text] as const]
+                : [],
+            ),
+          );
+
+        yield* offer(stream({ type: "message_start", message: { id: "first-response" } }));
+        yield* TestClock.adjust(800);
+        yield* offer(...firstContent);
+        yield* awaitUntil(() => reasoningItems().size === 1, "first response content");
+        yield* TestClock.adjust(2_000);
+        yield* offer(
+          stream({ type: "message_delta", delta: { stop_reason: "tool_use" } }),
+          stream({ type: "message_stop" }),
+          claudeSdkFrame({
+            type: "assistant",
+            uuid: "first-response-snapshot",
+            session_id: WAKE_NATIVE_SESSION,
+            parent_tool_use_id: null,
+            message: {
+              id: "first-response",
+              model: "claude-sonnet-4-6",
+              content: [{ type: "thinking", thinking: "First response ended", signature: "s" }],
+            },
+          }),
+        );
+        yield* awaitUntil(
+          () => [...reasoningItems().values()].includes("First response ended"),
+          "first response end",
+        );
+        // The tool runs.
+        yield* TestClock.adjust(10_000);
+        yield* offer(stream({ type: "message_start", message: { id: "second-response" } }));
+        yield* TestClock.adjust(700);
+        yield* offer(...firstContent);
+        yield* awaitUntil(() => reasoningItems().size === 2, "second response content");
+        yield* TestClock.adjust(500);
+        yield* offer(
+          stream({ type: "message_delta", delta: { stop_reason: "end_turn" } }),
+          makeResultFrame({ uuid: "generation-timing-result", result: "" }),
+        );
+        yield* Queue.take(harness.terminalReceipts);
+
+        const completed = harness.events.findLast(
+          (event) =>
+            event.type === "provider_turn.updated" && event.providerTurn.status === "completed",
+        );
+        assert.equal(
+          completed?.type === "provider_turn.updated"
+            ? completed.providerTurn.turnTokenUsage?.generationDurationMs
+            : undefined,
+          2_500,
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+        ),
+      ),
+  );
+
   it.effect.each([
     { model: "claude-opus-5-5", expected: "assistant_message" },
     { model: "claude-fable-5-1", expected: "assistant_message" },

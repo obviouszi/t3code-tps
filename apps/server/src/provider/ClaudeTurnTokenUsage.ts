@@ -11,6 +11,7 @@ export function normalizeClaudeTurnTokenUsage(
   result: { readonly subtype: SDKResultMessage["subtype"]; readonly usage?: unknown } | undefined,
   hasSubagents: boolean,
   terminalStatus: ProviderRuntimeTurnStatus,
+  generationDurationMs: number,
 ): TurnTokenUsage {
   const usage = result?.usage as Record<string, unknown> | undefined;
   if (!usage) {
@@ -76,6 +77,10 @@ export function normalizeClaudeTurnTokenUsage(
       usageStatus: "complete",
       inputTokens,
       outputTokens: rawOutputTokens,
+      // Only a complete count covers the same output the duration timed.
+      ...(generationDurationMs > 0
+        ? { generationDurationMs: Math.round(generationDurationMs) }
+        : {}),
     };
   }
   return {

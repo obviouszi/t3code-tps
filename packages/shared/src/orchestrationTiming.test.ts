@@ -1,10 +1,83 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  deriveGenerationRateTps,
   formatDuration,
   deriveActiveWorkStartedAt,
   deriveSubagentElapsedMs,
 } from "./orchestrationTiming.ts";
+
+describe("deriveGenerationRateTps", () => {
+  it("divides output tokens by generation time on a completed turn", () => {
+    expect(
+      deriveGenerationRateTps({
+        status: "completed",
+        turnTokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: true,
+          inputTokens: 10,
+          outputTokens: 100,
+          generationDurationMs: 2_000,
+        },
+      }),
+    ).toBe(50);
+  });
+
+  it("omits rates for missing usage, non-completed turns and under a second of generation", () => {
+    expect(deriveGenerationRateTps(undefined)).toBeUndefined();
+    expect(
+      deriveGenerationRateTps({
+        status: "completed",
+        turnTokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          inputTokens: 10,
+          outputTokens: 10,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      deriveGenerationRateTps({
+        status: "interrupted",
+        turnTokenUsage: {
+          usageStatus: "partial",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          outputTokens: 10,
+          generationDurationMs: 1_000,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      deriveGenerationRateTps({
+        status: "completed",
+        turnTokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          inputTokens: 10,
+          outputTokens: 10,
+          generationDurationMs: 999,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      deriveGenerationRateTps({
+        status: "completed",
+        turnTokenUsage: {
+          usageStatus: "complete",
+          usageScope: "main_agent",
+          hasSubagents: false,
+          inputTokens: 10,
+          outputTokens: 0,
+          generationDurationMs: 1_000,
+        },
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("formatDuration", () => {
   it.each([

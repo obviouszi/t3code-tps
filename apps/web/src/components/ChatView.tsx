@@ -11484,6 +11484,9 @@ export default function ChatView(props: ChatViewProps) {
                 footer={paintOnlyDisplayedTimeline ? null : threadStatusLine}
                 listRef={legendListRef}
                 timelineEntries={displayedTimeline.entries}
+                providerTurns={
+                  paintOnlyDisplayedTimeline ? undefined : serverProjection?.providerTurns
+                }
                 providerStatuses={
                   environmentById.get(
                     displayedThreadRef?.environmentId ?? activeThread.environmentId,

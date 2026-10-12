@@ -1,4 +1,35 @@
-import { isOrchestrationV2WorkActive, type OrchestrationV2Subagent } from "@t3tools/contracts";
+import {
+  isOrchestrationV2WorkActive,
+  type OrchestrationV2ProviderTurn,
+  type OrchestrationV2Subagent,
+} from "@t3tools/contracts";
+
+/** Below this much generation time a rate is noise, so none is shown. */
+const MIN_GENERATION_DURATION_MS = 1_000;
+
+/** Output tokens per second of model generation, for a completed turn whose provider timed it. */
+export function deriveGenerationRateTps(
+  turn: Pick<OrchestrationV2ProviderTurn, "status" | "turnTokenUsage"> | undefined,
+): number | undefined {
+  if (turn?.status !== "completed") return undefined;
+  const outputTokens = turn.turnTokenUsage?.outputTokens;
+  const durationMs = turn.turnTokenUsage?.generationDurationMs;
+  if (
+    outputTokens === undefined ||
+    outputTokens <= 0 ||
+    durationMs === undefined ||
+    durationMs < MIN_GENERATION_DURATION_MS
+  ) {
+    return undefined;
+  }
+  return (outputTokens * 1_000) / durationMs;
+}
+
+/** The text shown for a generation rate, and how a screen reader should say it. */
+export function formatGenerationRate(tps: number) {
+  const value = tps.toFixed(1);
+  return { label: `${value} tok/s`, spokenLabel: `Generation speed ${value} tokens per second` };
+}
 
 /** Unknown settled timing must not turn a task's age into its work duration. */
 export function deriveSubagentElapsedMs(

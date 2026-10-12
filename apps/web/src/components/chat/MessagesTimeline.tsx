@@ -65,7 +65,7 @@ const NOOP_OPEN_ATTACHMENT = (_attachment: ChatFileAttachment) => {};
 
 import { resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
-import { formatDuration } from "@t3tools/shared/orchestrationTiming";
+import { formatDuration, formatGenerationRate } from "@t3tools/shared/orchestrationTiming";
 import { getProjectFaviconCacheKey } from "@t3tools/shared/projectFavicon";
 import { claudeSkillInvocation } from "@t3tools/shared/toolActivity";
 import { observeVisibleAnimation } from "../../lib/visibleAnimation";
@@ -200,6 +200,7 @@ import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRowsWithState,
   type MessagesTimelineRowsProjection,
+  type TimelineProviderTurn,
   liveWorkEntryLabel,
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
@@ -475,6 +476,7 @@ interface MessagesTimelineProps {
 
   listRef: React.RefObject<LegendListRef | null>;
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  providerTurns?: ReadonlyArray<TimelineProviderTurn> | undefined;
   latestRun: TimelineLatestRun | null;
   runningRunId?: RunId | null;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -584,6 +586,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   awaitingUser = false,
   listRef,
   timelineEntries,
+  providerTurns,
   findExpanded = false,
   findQuery = "",
   activeFindMatch = null,
@@ -908,6 +911,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     const projection = deriveMessagesTimelineRowsWithState(
       {
         timelineEntries,
+        providerTurns,
         latestRun,
         runningRunId,
         expandedRunIds: visibleExpandedRunIds,
@@ -931,6 +935,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     listIdentityKey,
     workspaceRoot,
     timelineEntries,
+    providerTurns,
     latestRun,
     runningRunId,
     visibleExpandedRunIds,
@@ -2824,6 +2829,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             message={row.message}
             showCopyButton={row.showAssistantCopyButton}
             copyStreaming={row.assistantCopyStreaming}
+            generationRateTps={row.assistantGenerationRateTps}
           />
         ) : null}
       </div>
@@ -2890,6 +2896,7 @@ function AssistantMetaTimelineRow({
         message={row.message}
         showCopyButton={row.showAssistantCopyButton}
         copyStreaming={row.assistantCopyStreaming}
+        generationRateTps={row.assistantGenerationRateTps}
         alwaysVisible
       />
     </div>
@@ -2902,6 +2909,7 @@ function AssistantMessageMeta({
   message,
   showCopyButton,
   copyStreaming,
+  generationRateTps,
   alwaysVisible = false,
 }: {
   className?: string;
@@ -2909,9 +2917,12 @@ function AssistantMessageMeta({
   message: ChatMessage;
   showCopyButton: boolean;
   copyStreaming: boolean;
+  generationRateTps?: number | undefined;
   alwaysVisible?: boolean;
 }) {
   const ctx = use(TimelineRowCtx);
+  const generationRate =
+    generationRateTps === undefined ? null : formatGenerationRate(generationRateTps);
 
   return (
     <div
@@ -2946,6 +2957,11 @@ function AssistantMessageMeta({
           </TooltipPopup>
         </Tooltip>
       )}
+      {generationRate ? (
+        <p aria-label={generationRate.spokenLabel} className="text-muted-foreground">
+          {generationRate.label}
+        </p>
+      ) : null}
     </div>
   );
 }

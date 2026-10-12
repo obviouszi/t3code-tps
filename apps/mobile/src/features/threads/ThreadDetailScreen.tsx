@@ -20,6 +20,7 @@ import type {
   EnvironmentId,
   MessageId,
   ModelSelection,
+  OrchestrationV2ProviderTurn,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,
@@ -162,6 +163,7 @@ export interface ThreadDetailScreenProps {
   readonly feedbackSubmissions: ReadonlyArray<CodexFeedbackSubmission>;
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly selectedThreadProviderTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly activityRun: ThreadFeedLatestRun | null;
   readonly activeWorkStartedAt: string | null;
   /** The live work is a provider-native subagent's runless root turn. */
@@ -1159,6 +1161,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               threadId={props.selectedThread.id}
               workspaceRoot={props.threadCwd}
               feed={props.selectedThreadFeed}
+              providerTurns={props.selectedThreadProviderTurns}
               worktreeSetup={props.worktreeSetup}
               setupWorkingStartedAt={props.setupWorkingStartedAt}
               queuedMessages={props.queuedMessages}

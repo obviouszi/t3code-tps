@@ -89,6 +89,7 @@ describe("billable native turn usage", () => {
         },
         true,
         "completed",
+        0,
       ),
     ).toEqual({
       usageStatus: "complete",
@@ -100,6 +101,21 @@ describe("billable native turn usage", () => {
       outputTokens: 20,
       reasoningTokens: 20,
     });
+  });
+
+  it("reports Claude generation time only alongside a complete output count", () => {
+    const result = { subtype: "success", usage: { input_tokens: 4, output_tokens: 200 } } as const;
+    expect(normalizeClaudeTurnTokenUsage(result, false, "completed", 2_500)).toMatchObject({
+      usageStatus: "complete",
+      outputTokens: 200,
+      generationDurationMs: 2_500,
+    });
+    expect(normalizeClaudeTurnTokenUsage(result, false, "interrupted", 2_500)).not.toHaveProperty(
+      "generationDurationMs",
+    );
+    expect(normalizeClaudeTurnTokenUsage(result, false, "completed", 0)).not.toHaveProperty(
+      "generationDurationMs",
+    );
   });
 
   it("does not turn a zeroed Claude crash result into a measured zero-cost turn", () => {
@@ -114,6 +130,7 @@ describe("billable native turn usage", () => {
         },
         false,
         "failed",
+        0,
       ).usageStatus,
     ).toBe("unavailable");
     expect(
@@ -127,6 +144,7 @@ describe("billable native turn usage", () => {
         },
         false,
         "interrupted",
+        0,
       ),
     ).toMatchObject({ usageStatus: "partial", inputTokens: 4, outputTokens: 2 });
   });

@@ -3,6 +3,7 @@ export { worktreeSetupAgentStarted } from "@t3tools/client-runtime/worktree-setu
 import { isLiveSubagentTurnItem } from "@t3tools/client-runtime/state/subagentRuntime";
 import * as DateTime from "effect/DateTime";
 import * as Equal from "effect/Equal";
+import { deriveGenerationRateTps } from "@t3tools/shared/orchestrationTiming";
 import {
   assistantCitationLabel,
   collectAssistantCitations,
@@ -49,6 +50,7 @@ import {
   type MessageId,
   type WorktreeSetupSnapshot,
   type OrchestrationV2ProjectedTurnItem,
+  type OrchestrationV2ProviderTurn,
   type RunAttemptId,
   RunId,
   type ThreadId,
@@ -606,6 +608,7 @@ type MessagesTimelineRowContent =
       showAssistantMeta: boolean;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
+      assistantGenerationRateTps?: number | undefined;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
     }
@@ -617,6 +620,7 @@ type MessagesTimelineRowContent =
       message: ChatMessage;
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
+      assistantGenerationRateTps?: number | undefined;
     }
   | {
       kind: "event";
@@ -1279,6 +1283,7 @@ function attachTrailingToolGroupsToAssistant(
       message: row.message,
       showAssistantCopyButton: row.showAssistantCopyButton,
       assistantCopyStreaming: row.assistantCopyStreaming,
+      assistantGenerationRateTps: row.assistantGenerationRateTps,
     });
   }
 
@@ -1354,6 +1359,11 @@ function timelineRowEntries(entries: ReadonlyArray<TimelineEntry>) {
   return withoutSubagentDelegationRows(settleSupersededReasoning(entries));
 }
 
+export type TimelineProviderTurn = Pick<
+  OrchestrationV2ProviderTurn,
+  "id" | "status" | "turnTokenUsage"
+>;
+
 /** The turn folds the timeline would draw, before applying expansion state. */
 function deriveTimelineTurnFolds(
   input: Pick<
@@ -1382,6 +1392,7 @@ function deriveTimelineTurnFolds(
 
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  providerTurns?: ReadonlyArray<TimelineProviderTurn> | undefined;
   latestRun?: TimelineLatestRun | null;
   runningRunId?: RunId | null;
   expandedRunIds?: ReadonlySet<RunId>;
@@ -1402,6 +1413,7 @@ export function deriveMessagesTimelineRows(input: {
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
   const timelineEntries = timelineRowEntries(input.timelineEntries);
+  const providerTurnsById = new Map(input.providerTurns?.map((turn) => [turn.id, turn]));
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -1870,6 +1882,7 @@ export function deriveMessagesTimelineRows(input: {
       timelineEntry.message.role === "assistant" &&
       terminalAssistantMessageIds.has(timelineEntry.message.id) &&
       !assistantResponseStillInProgress;
+    const providerTurnId = timelineEntry.projectedItem?.item.providerTurnId;
 
     nextRows.push({
       kind: "message",
@@ -1883,6 +1896,10 @@ export function deriveMessagesTimelineRows(input: {
       showAssistantMeta,
       showAssistantCopyButton: showAssistantMeta,
       assistantCopyStreaming: timelineEntry.message.streaming || assistantResponseStillInProgress,
+      assistantGenerationRateTps:
+        timelineEntry.message.role === "assistant" && providerTurnId != null
+          ? deriveGenerationRateTps(providerTurnsById.get(providerTurnId))
+          : undefined,
       assistantTurnDiffSummary:
         timelineEntry.message.role === "assistant"
           ? turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
@@ -2245,7 +2262,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.projectedItem === bm.projectedItem &&
         a.message === bm.message &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
-        a.assistantCopyStreaming === bm.assistantCopyStreaming
+        a.assistantCopyStreaming === bm.assistantCopyStreaming &&
+        a.assistantGenerationRateTps === bm.assistantGenerationRateTps
       );
     }
 
@@ -2336,6 +2354,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.showAssistantMeta === bm.showAssistantMeta &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
+        a.assistantGenerationRateTps === bm.assistantGenerationRateTps &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );

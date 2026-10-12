@@ -14,6 +14,10 @@ import {
 } from "./claudeWorkflowProgress.ts";
 
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import {
+  trackClaudeGenerationTiming,
+  type ClaudeGenerationTiming,
+} from "../../provider/ClaudeGenerationTiming.ts";
 import { normalizeClaudeTurnTokenUsage } from "../../provider/ClaudeTurnTokenUsage.ts";
 import {
   type CanUseTool,
@@ -83,6 +87,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Hex from "effect/encoding/Hex";
@@ -2926,6 +2931,7 @@ interface ActiveClaudeTurnContext {
       { readonly startedAt: DateTime.Utc; readonly ordinal: number; text: string }
     >;
   };
+  readonly generation: ClaudeGenerationTiming;
   readonly toolCalls: Map<string, ActiveClaudeToolCall>;
   readonly ignoredTaskIds: Set<string>;
   readonly announcedUsageLimits: Set<string>;
@@ -3396,6 +3402,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
         const activeTurn = yield* Ref.make<ActiveClaudeTurnContext | null>(null);
         const sdkMessageLock = yield* Semaphore.make(1);
+        // When each stream event came off the SDK stream. Held and buffered
+        // frames are handled later, and generation timing needs the original time.
+        const streamEventArrivalMs = new WeakMap<SDKMessage, number>();
         // Survives turn settle: members mostly finish after the launching
         // turn has ended, and each transition must be emitted exactly once.
         const workflowMemberStates = yield* Ref.make(
@@ -5878,6 +5887,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                     input.context.subagentsByTaskId.size > 0 ||
                       input.context.subagentsByToolUseId.size > 0,
                     input.status,
+                    input.context.generation.coversAllOutput
+                      ? input.context.generation.durationMs
+                      : 0,
                   ),
                 },
               }),
@@ -6714,6 +6726,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           // Subagent narration belongs to its child thread, never the parent log.
           if (message.type === "stream_event" && !message.parent_tool_use_id) {
             const event = message.event;
+            trackClaudeGenerationTiming(
+              context.generation,
+              event.type,
+              streamEventArrivalMs.get(message) ?? (yield* Clock.currentTimeMillis),
+            );
             const reasoning = context.reasoning;
             if (event.type === "message_start") {
               reasoning.messageId = event.message.id;
@@ -7582,6 +7599,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             const interrupted = (yield* Ref.get(interruptedTurns)).has(context.providerTurnId);
             const wasSteered = (yield* Ref.get(steeredTurns)).has(context.providerTurnId);
             if (!interrupted && wasSteered && isClaudeActiveSteeringAbortResult(message)) {
+              // The aborted segment was timed, but its tokens are on this dropped result.
+              context.generation.coversAllOutput = false;
               return;
             }
             yield* Ref.update(steeredTurns, (current) => {
@@ -7829,6 +7848,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               // This turn showed the wake, so no offer will name its work.
               yield* clearWakeReports(liveQuery.nativeThreadId);
             }
+            // That output was timed here, but its tokens are on this dropped result.
+            context.generation.coversAllOutput = false;
             yield* Effect.logInfo("orchestration-v2.claude-result-for-other-turn", {
               providerTurnId: context.providerTurnId,
               origin: message.origin?.kind,
@@ -8371,7 +8392,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   ) {
                     context.permissionMode = message.permissionMode;
                   }
-                  return handleSdkMessage({ query: querySession, message });
+                  if (message.type !== "stream_event") {
+                    return handleSdkMessage({ query: querySession, message });
+                  }
+                  return Effect.flatMap(Clock.currentTimeMillis, (arrivedAtMs) => {
+                    streamEventArrivalMs.set(message, arrivedAtMs);
+                    return handleSdkMessage({ query: querySession, message });
+                  });
                 }),
               ),
             ),
@@ -8478,6 +8505,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 lastThinking: null,
                 snapshots: new Set(),
                 blocks: new Map(),
+              },
+              generation: {
+                responseStartedAtMs: null,
+                durationMs: 0,
+                // A continuation joins wake output already under way, and
+                // stream events that arrived while idle were not kept.
+                coversAllOutput: !isClaudeProviderContinuationTurn(turnInput),
               },
               toolCalls: new Map(),
               ignoredTaskIds: new Set(),

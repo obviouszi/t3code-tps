@@ -22,9 +22,12 @@ import {
   type ChatImageAttachment,
   type EnvironmentId,
   type MessageId,
+  type OrchestrationV2ProviderTurn,
   type OrchestrationV2ProjectedTurnItem,
+  type ProviderTurnId,
   type RunId,
 } from "@t3tools/contracts";
+import { deriveGenerationRateTps, formatGenerationRate } from "@t3tools/shared/orchestrationTiming";
 import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
 import { parseThreadLinkHref } from "@t3tools/shared/threadLinks";
@@ -288,6 +291,7 @@ export interface ThreadFeedProps {
   readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
   readonly contentPresentation: ThreadContentPresentation;
   readonly agentLabel: string;
   readonly latestRun: ThreadFeedLatestRun | null;
@@ -1559,10 +1563,21 @@ function renderFeedEntry(
     /** Width full-bleed rows (HTML renders) lay out in. */
     readonly contentWidth: number;
     readonly threadTitle: string;
+    readonly providerTurnsById: ReadonlyMap<ProviderTurnId, OrchestrationV2ProviderTurn>;
   },
 ) {
   const entry = info.item;
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
+  const providerTurnId =
+    entry.type === "message" && entry.message.role === "assistant"
+      ? entry.message.projectedItem?.item.providerTurnId
+      : null;
+  const generationRateTps =
+    providerTurnId == null
+      ? undefined
+      : deriveGenerationRateTps(props.providerTurnsById.get(providerTurnId));
+  const generationRate =
+    generationRateTps === undefined ? null : formatGenerationRate(generationRateTps);
 
   if (entry.type === "run-fold") {
     return (
@@ -1992,6 +2007,14 @@ function renderFeedEntry(
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
+            {generationRate ? (
+              <Text
+                accessibilityLabel={generationRate.spokenLabel}
+                className="ml-1 font-t3-medium text-xs tabular-nums text-foreground-secondary"
+              >
+                {generationRate.label}
+              </Text>
+            ) : null}
           </View>
         ) : null}
       </Animated.View>
@@ -2225,6 +2248,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const workRowSizing = useMemo(
     () => deriveThreadWorkLogSizing({ baseFontSize: appearance.baseFontSize, fontScale }),
     [appearance.baseFontSize, fontScale],
+  );
+  const providerTurnsById = useMemo(
+    () => new Map(props.providerTurns.map((turn) => [turn.id, turn])),
+    [props.providerTurns],
   );
   const previousTextSize = useRef(workRowSizing.textSizeKey);
   useLayoutEffect(() => {
@@ -3080,6 +3107,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
               markdownContentWidth,
               contentWidth,
               threadTitle: props.threadTitle,
+              providerTurnsById,
               skills: props.skills,
               workspaceRoot: props.workspaceRoot,
             })}
@@ -3118,6 +3146,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       userBubbleMaxWidth,
       markdownContentWidth,
       contentWidth,
+      providerTurnsById,
       onCopyWorkRow,
       markdownLinkHandlers,
       onPressPreview,
